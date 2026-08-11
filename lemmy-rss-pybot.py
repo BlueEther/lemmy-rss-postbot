@@ -149,21 +149,21 @@ def fetch_feed_with_retries(feed_url, max_retries=3, retry_delay=5):
 # banner
 def show_banner():
     banner = f"""
-{RED}_                                     ____  ____ ____  
+ {RED}_                                     ____  ____ ____  
 | |    ___ _ __ ___  _ __ ___  _   _  |  _ \\/ ___/ ___| 
 | |   / _ \\ '_ ` _ \\| '_ ` _ \\| | | | | |_) \\___ \\___ \\ 
 | |__|  __/ | | | | | | | | | |_| | |  _ < ___) |__) |
 |_____\\___|_| |_| |_| |_| |_|\\__, | |_| \\_\\____/____/ 
                                |___/                 
 
-{BLUE} ____        ____        _   
+ {BLUE} ____        ____        _   
 |  _ \\ _   _| __ )  ___ | |_ 
 | |_) | | | |  _ \\ / _ \\| __|
 |  __/| |_| | |_) | (_) | |_ 
 |_|    \\__, |____/ \\___/ \\__|
        |___/                 
-
-{BOLD}{GREEN}Version 1.34  - {ENDC} {BOLD}{YELLOW}Created By Dimitris Vagiakakos @sv1sjp - TuxHouse{ENDC}
+ 
+ {BOLD}{GREEN}Version 1.34  - {ENDC} {BOLD}{YELLOW}Created By Dimitris Vagiakakos @sv1sjp - TuxHouse{ENDC}
 """
     print(banner)
 
@@ -171,8 +171,9 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Lemmy RSS PyBot: Reads RSS feeds and posts new articles to Lemmy communities.')
     parser.add_argument('--feeds', type=str, default='rss_feeds.json', help='Path to RSS feeds JSON file.')
     parser.add_argument('--log', type=str, default='lemmy_bot.log', help='Path to log file.')
-    parser.add_argument('--interval', type=int, help='Interval in minutes between feed checks (overridden by --time if provided).')
-    parser.add_argument('--time', type=int, help='User-defined interval between feed checks in minutes.')
+        # Accept the same option under two names but store as interval
+    parser.add_argument('--interval', '--time', dest='interval', type=int, default=15,
+                        help='Interval in minutes between feed checks (default: 15 minutes). Alias: --time')
     parser.add_argument('--verbose', action='store_true', help='Enable verbose output.')
     parser.add_argument('--keywords', type=str, help='Comma-separated list of keywords to filter articles.')
     parser.add_argument('--keywords-file', type=str, help='Path to a file containing keywords to filter articles.')
@@ -446,6 +447,19 @@ Examples of Lemmy RSS PyBot Usage:
 
                             if link in seen_articles or article_title in seen_articles.values():
                                 continue
+                            # Per-feed include_regex filter: if provided, match it against the URL path.
+                            include_regex = selected_feed.get('include_regex')
+                            if include_regex and link:
+                                try:
+                                    from urllib.parse import urlparse
+                                    parsed = urlparse(link)
+                                    path = parsed.path or ""
+                                    pattern = regex.compile(include_regex, flags=regex.IGNORECASE)
+                                    if not pattern.search(path):
+                                        logging.debug(f"Skipping article '{article_title}' because URL path '{path}' does not match include_regex '{include_regex}'.")
+                                        continue
+                                except Exception as e:
+                                    logging.debug(f"Error applying include_regex '{include_regex}' to link '{link}': {e}")
 
                             # Build the content to search for keywords
                             if keywords:
@@ -481,7 +495,6 @@ Examples of Lemmy RSS PyBot Usage:
                             except Exception as e:
                                 logging.error(f"Error posting article '{article_title}' to community '{community_name}': {e}")
                                 logging.debug(traceback.format_exc())
-
 
                             # Keyword filtering
                             if keywords:
