@@ -151,9 +151,9 @@ def show_banner():
     banner = f"""
  {RED}_                                     ____  ____ ____  
 | |    ___ _ __ ___  _ __ ___  _   _  |  _ \\/ ___/ ___| 
-| |   / _ \\ '_ ` _ \\| '_ ` _ \\| | | | | |_) \\___ \\___ \\ 
+| |   / _ \\ '_ ` _ \\| '_ ` _ \\| | | | | |_) \\___ \\___ \
 | |__|  __/ | | | | | | | | | |_| | |  _ < ___) |__) |
-|_____\\___|_| |_| |_| |_| |_|\\__, | |_| \\_\\____/____/ 
+|_____)___|_| |_| |_| |_| |_|\\__, | |_| \\_\\____/____/ 
                                |___/                 
 
  {BLUE} ____        ____        _   
@@ -252,31 +252,42 @@ def get_community_id(base_url, community_name, jwt):
         raise Exception(f'Error fetching community ID: {response.status_code} {response.text}')
 
 def create_post(base_url, jwt, community_id, community_name, title, url):
-    """Create a new post in a Lemmy community."""
+    """Create a new link post in a Lemmy community.
+
+    Returns (success_bool, response_json_or_text). On success response_json is parsed JSON when available.
+    """
     try:
         post_url = f'{base_url}/api/v3/post'
-        headers = {
-            'Authorization': f'Bearer {jwt}'
-        }
+        headers = {'Authorization': f'Bearer {jwt}'}
         data = {
             'community_id': community_id,
             'name': title,
-            'url': url
+            'url': url,
         }
         response = requests.post(post_url, headers=headers, json=data)
         if response.status_code == 200:
-            # Log the article when it's successfully posted
             log_posted_article(title, url, community_name)
+            try:
+                return True, response.json()
+            except Exception:
+                return True, response.text
         elif response.status_code == 401:
-            raise Exception('Unauthorized: JWT expired or invalid.')
+            logging.error('Unauthorized: JWT expired or invalid.')
+            return False, response.text
         else:
-            raise Exception(f'Failed to create post: {response.status_code} {response.text}')
+            logging.error(f'Failed to create post: {response.status_code} {response.text}')
+            return False, response.text
     except Exception as e:
         logging.error(f"Error posting article '{title}' to community '{community_name}': {e}")
         logging.debug(traceback.format_exc())
+        return False, str(e)
 
 def load_seen_articles(log_file):
-    """Load seen articles from the log file by parsing log entries."""
+    """Load seen articles from the log file by parsing log entries.
+
+    Returns a dict mapping article_url -> set of community names where it was posted.
+    Uses '*' in the set to indicate the article was posted but community not recorded (backwards compatibility).
+    """
     seen_articles = {}
     if os.path.exists(log_file):
         with open(log_file, 'r') as f:
@@ -286,15 +297,75 @@ def load_seen_articles(log_file):
                 if match:
                     article_title = match.group(1).strip()
                     article_url = match.group(2).strip()
-                    seen_articles[article_url] = article_title
+                    community = match.group(3).strip()
+                    seen_articles.setdefault(article_url, set()).add(community)
                 else:
-                    # For backward compatibility with old logs
+                    # For backward compatibility with old logs that may not have community
                     match = regex.search(r'Posted: (.*?) \| (.*)', line)
                     if match:
                         article_title = match.group(1).strip()
                         article_url = match.group(2).strip()
-                        seen_articles[article_url] = article_title
+                        # Mark as posted but community unknown
+                        seen_articles.setdefault(article_url, set()).add('*')
     return seen_articles
+
+
+def post_article_primary_and_crossposts(base_url, jwt, community_ids_cache, primary_community, cross_communities, title, url):
+    """Create the canonical post in primary_community, then create posts with the same URL in cross_communities.
+
+    Returns list of (community_name, success_bool, response) for attempted posts; the first entry is the primary post.
+    """
+    results = []
+
+    # Resolve primary community id
+    if primary_community not in community_ids_cache:
+        try:
+            community_ids_cache[primary_community] = get_community_id(base_url, primary_community, jwt)
+        except Exception as e:
+            logging.error(f'Error getting community ID for "{primary_community}": {e}')
+            results.append((primary_community, False, str(e)))
+            return results
+
+    primary_id = community_ids_cache[primary_community]
+
+    # Create canonical post (regular link post)
+    ok, resp = create_post(base_url, jwt, primary_id, primary_community, title, url)
+    results.append((primary_community, ok, resp))
+    if not ok:
+        return results
+
+    # Prepare crosspost list (avoid duplicating primary)
+    communities_to_cross = []
+    if cross_communities:
+        for c in cross_communities:
+            if not c:
+                continue
+            if c == primary_community:
+                continue
+            if c not in communities_to_cross:
+                communities_to_cross.append(c)
+
+    # For each cross target, resolve id and create a post with the same url (server will surface it as a cross_post)
+    for target in communities_to_cross:
+        try:
+            if target not in community_ids_cache:
+                try:
+                    community_ids_cache[target] = get_community_id(base_url, target, jwt)
+                except Exception as e:
+                    logging.error(f'Error getting community ID for crosspost target "{target}": {e}')
+                    results.append((target, False, str(e)))
+                    continue
+
+            target_id = community_ids_cache[target]
+            ok, resp = create_post(base_url, jwt, target_id, target, title, url)
+            results.append((target, ok, resp))
+        except Exception as e:
+            logging.error(f'Unexpected error while crossposting to {target}: {e}')
+            logging.debug(traceback.format_exc())
+            results.append((target, False, str(e)))
+
+    return results
+
 
 def main():
     # Show the marketing banner with style and colors
@@ -325,7 +396,7 @@ Examples of Lemmy RSS PyBot Usage:
    python lemmy-rss-pybot.py --feeds rss_feeds.json --keywords-file keywords.txt --max_posts 5
    
 7. Keyword Filtering by using custom keywords:
-   python lemmy-rss-pybot.py --feeds rss_feeds.json --log lemmy_bot.log --keywords "Ελλάδα, Κύπρος, Europe, Israel, Ισραήλ, Οικονομία, Business" --max_posts 5 --interval 15
+   python lemmy-rss-pybot.py --feeds rss_feeds.json --log lemmy_bot.log --keywords "Ελλάδα, Κύπρος, Europe, Israel, Ισραήλ, Οικονομία, Business" --max_posts 5 --interva[...]
 """)
         sys.exit(0)
 
@@ -411,8 +482,12 @@ Examples of Lemmy RSS PyBot Usage:
                 if community_name not in feed_index:
                     feed_index[community_name] = random.randint(0, len(community_feeds) - 1)
 
+                # Determine interval minutes (support args.interval and fallback to random)
+                interval_arg = getattr(args, 'interval', None)
+                interval_minutes = interval_arg if interval_arg is not None else random.randint(11, 23)
+
                 if community_name not in last_post_time or \
-                   (datetime.now(timezone.utc) - last_post_time[community_name]).total_seconds() > (args.time or random.randint(11, 23)) * 60:
+                   (datetime.now(timezone.utc) - last_post_time[community_name]).total_seconds() > interval_minutes * 60:
 
                     simultaneous_posts = 0
                     current_feed_idx = feed_index[community_name]
@@ -445,8 +520,10 @@ Examples of Lemmy RSS PyBot Usage:
                             if not article_title or not link:
                                 continue  # Skip if essential data is missing
 
-                            if link in seen_articles or article_title in seen_articles.values():
+                            # Skip if this article was already posted to this community
+                            if link in seen_articles and ('*' in seen_articles[link] or community_name in seen_articles[link]):
                                 continue
+
                             # Per-feed include_regex filter: if provided, match it against the URL path.
                             include_regex = selected_feed.get('include_regex')
                             if include_regex and link:
@@ -481,10 +558,23 @@ Examples of Lemmy RSS PyBot Usage:
                                     logging.debug(f"Skipping article '{article_title}' as it does not match any keyword.")
                                     continue  # Skip if none of the keywords are found
 
-                            # Proceed to post the article if there are no keyword filters or the article matches
-                            try:
-                                create_post(lemmy_instance_url, jwt, community_id, community_name, article_title, link)
-                                seen_articles[link] = article_title
+                            # Proceed to post the article (create canonical post then create posts with same URL for native crossposts)
+                            crosspost_list = selected_feed.get('crosspost') or selected_feed.get('crosspost_communities')
+                            # Accept either a list or a comma-separated string
+                            if isinstance(crosspost_list, str):
+                                crosspost_list = [c.strip() for c in crosspost_list.split(',') if c.strip()]
+
+                            results = post_article_primary_and_crossposts(lemmy_instance_url, jwt, community_ids, community_name, crosspost_list, article_title, link)
+
+                            # Update seen_articles for successful posts (per-community)
+                            any_success = False
+                            for (comm, ok, resp) in results:
+                                if ok:
+                                    seen_articles.setdefault(link, set()).add(comm)
+                                    any_success = True
+
+                            if any_success:
+                                # mark last post time for the primary community
                                 last_post_time[community_name] = datetime.now(timezone.utc)
                                 posts_made += 1
                                 simultaneous_posts += 1
@@ -492,46 +582,6 @@ Examples of Lemmy RSS PyBot Usage:
 
                                 if simultaneous_posts >= simultaneously or posts_made >= args.max_posts:
                                     break
-                            except Exception as e:
-                                logging.error(f"Error posting article '{article_title}' to community '{community_name}': {e}")
-                                logging.debug(traceback.format_exc())
-
-                            # Keyword filtering
-                            if keywords:
-                                content_to_search = f"{article_title} {entry.get('summary', '')}"
-                                content_to_search = unicodedata.normalize('NFKD', content_to_search)
-                                matched = False
-                                # Normalize content to NFC
-                            content_to_search = unicodedata.normalize('NFC', content_to_search)
-
-                            # Normalize keywords to NFC
-                            keywords_normalized = [unicodedata.normalize('NFC', kw) for kw in keywords]
-
-                            matched = False
-                            for keyword in keywords_normalized:
-                                # Compile a Unicode-aware regex pattern with word boundaries
-                                pattern = regex.compile(r'\b' + regex.escape(keyword) + r'\b', flags=regex.IGNORECASE | regex.UNICODE)
-                                if pattern.search(content_to_search):
-                                    matched = True
-                                    logging.debug(f"Article '{article_title}' matched keyword '{keyword}'.")
-                                    break
-                            if not matched:
-                                logging.debug(f"Skipping article '{article_title}' as it does not match any keyword.")
-                                continue  # Skip if none of the keywords are found
-
-                            try:
-                                create_post(lemmy_instance_url, jwt, community_id, community_name, article_title, link)
-                                seen_articles[link] = article_title
-                                last_post_time[community_name] = datetime.now(timezone.utc)
-                                posts_made += 1
-                                simultaneous_posts += 1
-                                found_matching_articles = True
-
-                                if simultaneous_posts >= simultaneously or posts_made >= args.max_posts:
-                                    break
-                            except Exception as e:
-                                logging.error(f"Error posting article '{article_title}' to community '{community_name}': {e}")
-                                logging.debug(traceback.format_exc())
 
                         # Move to next feed
                         current_feed_idx = (current_feed_idx + 1) % len(community_feeds)
@@ -545,12 +595,12 @@ Examples of Lemmy RSS PyBot Usage:
                         logging.info(f"No matching articles found for community '{community_name}'.")
 
             if posts_made == 0:
-                interval = args.time if args.time else random.randint(11, 23)
+                interval = interval_minutes if 'interval_minutes' in locals() else random.randint(11, 23)
                 logging.info(f"No new posts made. Sleeping for {interval} minutes.")
                 time.sleep(interval * 60)
             else:
                 elapsed_time = datetime.now(timezone.utc) - start_time
-                sleep_time = (args.time if args.time else random.randint(11, 23)) * 60 - elapsed_time.total_seconds()
+                sleep_time = (interval_minutes if 'interval_minutes' in locals() else random.randint(11, 23)) * 60 - elapsed_time.total_seconds()
                 if sleep_time > 0:
                     logging.info(f"Sleeping for {sleep_time / 60:.2f} minutes.")
                     time.sleep(sleep_time)
