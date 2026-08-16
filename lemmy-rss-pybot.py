@@ -251,6 +251,30 @@ def get_community_id(base_url, community_name, jwt):
     else:
         raise Exception(f'Error fetching community ID: {response.status_code} {response.text}')
 
+
+def canonicalize_url(url):
+    """Return a canonical key for deduping articles.
+    - Removes query and fragment parts.
+    - If a numeric article id (4+ digits) is present in the path, return '<netloc>|<id>'.
+    - Otherwise return the normalized scheme://netloc + path (no query/fragment).
+    """
+    try:
+        from urllib.parse import urlparse, urlunparse
+        parsed = urlparse(url)
+        # strip query and fragment
+        clean = parsed._replace(query='', fragment='')
+        path = clean.path or ''
+        # look for a numeric article id (e.g. /.../959714/ or /.../959714)
+        m = regex.search(r'/(\d{4,})(?:/|$)', path)
+        if m:
+            article_id = m.group(1)
+            return f"{clean.netloc}|{article_id}"
+        # fallback: normalized url without query/fragment
+        return urlunparse(clean._replace(params=''))
+    except Exception:
+        # on any parsing error, fall back to the raw URL
+        return url
+
 def create_post(base_url, jwt, community_id, community_name, title, url):
     """Create a new link post in a Lemmy community.
 
@@ -298,15 +322,17 @@ def load_seen_articles(log_file):
                     article_title = match.group(1).strip()
                     article_url = match.group(2).strip()
                     community = match.group(3).strip()
-                    seen_articles.setdefault(article_url, set()).add(community)
+                    key = canonicalize_url(article_url)
+                    seen_articles.setdefault(key, set()).add(community)
                 else:
                     # For backward compatibility with old logs that may not have community
                     match = regex.search(r'Posted: (.*?) \| (.*)', line)
                     if match:
                         article_title = match.group(1).strip()
                         article_url = match.group(2).strip()
+                        key = canonicalize_url(article_url)
                         # Mark as posted but community unknown
-                        seen_articles.setdefault(article_url, set()).add('*')
+                        seen_articles.setdefault(key, set()).add('*')
     return seen_articles
 
 
@@ -520,8 +546,11 @@ Examples of Lemmy RSS PyBot Usage:
                             if not article_title or not link:
                                 continue  # Skip if essential data is missing
 
+                            # Compute canonical dedupe key for this link (handles same article under different section paths or slug typos)
+                            key = canonicalize_url(link)
+
                             # Skip if this article was already posted to this community
-                            if link in seen_articles and ('*' in seen_articles[link] or community_name in seen_articles[link]):
+                            if key in seen_articles and ('*' in seen_articles[key] or community_name in seen_articles[key]):
                                 continue
 
                             # Per-feed include_regex filter: if provided, match it against the URL path.
@@ -549,7 +578,7 @@ Examples of Lemmy RSS PyBot Usage:
                                 keywords_normalized = [unicodedata.normalize('NFC', kw) for kw in keywords]
                                 matched = False
                                 for keyword in keywords_normalized:
-                                    pattern = regex.compile(r'\b' + regex.escape(keyword) + r'\b', flags=regex.IGNORECASE | regex.UNICODE)
+                                    pattern = regex.compile(r'\\b' + regex.escape(keyword) + r'\\b', flags=regex.IGNORECASE | regex.UNICODE)
                                     if pattern.search(content_to_search):
                                         matched = True
                                         logging.debug(f"Article '{article_title}' matched keyword '{keyword}'.")
@@ -570,7 +599,7 @@ Examples of Lemmy RSS PyBot Usage:
                             any_success = False
                             for (comm, ok, resp) in results:
                                 if ok:
-                                    seen_articles.setdefault(link, set()).add(comm)
+                                    seen_articles.setdefault(key, set()).add(comm)
                                     any_success = True
 
                             if any_success:
