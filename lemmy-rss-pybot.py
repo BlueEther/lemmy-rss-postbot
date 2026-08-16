@@ -151,9 +151,9 @@ def show_banner():
     banner = f"""
  {RED}_                                     ____  ____ ____  
 | |    ___ _ __ ___  _ __ ___  _   _  |  _ \\/ ___/ ___| 
-| |   / _ \\ '_ ` _ \\| '_ ` _ \\| | | | | |_) \\___ \\___ \\ 
+| |   / _ \\ '_ ` _ \\| '_ ` _ \\| | | | | |_) \\___ \\___ \
 | |__|  __/ | | | | | | | | | |_| | |  _ < ___) |__) |
-|_____\\___|_| |_| |_| |_| |_|\\__, | |_| \\_\\____/____/ 
+|_____\___|_| |_| |_| |_| |_|\\__, | |_| \\_\\____/____/ 
                                |___/                 
 
  {BLUE} ____        ____        _   
@@ -251,6 +251,30 @@ def get_community_id(base_url, community_name, jwt):
     else:
         raise Exception(f'Error fetching community ID: {response.status_code} {response.text}')
 
+
+def canonicalize_url(url):
+    """Return a canonical key for deduping articles.
+    - Removes query and fragment parts.
+    - If a numeric article id (4+ digits) is present in the path, return '<netloc>|<id>'.
+    - Otherwise return the normalized scheme://netloc + path (no query/fragment).
+    """
+    try:
+        from urllib.parse import urlparse, urlunparse
+        parsed = urlparse(url)
+        # strip query and fragment
+        clean = parsed._replace(query='', fragment='')
+        path = clean.path or ''
+        # look for a numeric article id (e.g. /.../959714/ or /.../959714)
+        m = regex.search(r'/(\d{4,})(?:/|$)', path)
+        if m:
+            article_id = m.group(1)
+            return f"{clean.netloc}|{article_id}"
+        # fallback: normalized url without query/fragment
+        return urlunparse(clean._replace(params=''))
+    except Exception:
+        # on any parsing error, fall back to the raw URL
+        return url
+
 def create_post(base_url, jwt, community_id, community_name, title, url):
     """Create a new post in a Lemmy community."""
     try:
@@ -286,14 +310,16 @@ def load_seen_articles(log_file):
                 if match:
                     article_title = match.group(1).strip()
                     article_url = match.group(2).strip()
-                    seen_articles[article_url] = article_title
+                    key = canonicalize_url(article_url)
+                    seen_articles[key] = article_title
                 else:
                     # For backward compatibility with old logs
                     match = regex.search(r'Posted: (.*?) \| (.*)', line)
                     if match:
                         article_title = match.group(1).strip()
                         article_url = match.group(2).strip()
-                        seen_articles[article_url] = article_title
+                        key = canonicalize_url(article_url)
+                        seen_articles[key] = article_title
     return seen_articles
 
 def main():
@@ -325,7 +351,7 @@ Examples of Lemmy RSS PyBot Usage:
    python lemmy-rss-pybot.py --feeds rss_feeds.json --keywords-file keywords.txt --max_posts 5
    
 7. Keyword Filtering by using custom keywords:
-   python lemmy-rss-pybot.py --feeds rss_feeds.json --log lemmy_bot.log --keywords "Ελλάδα, Κύπρος, Europe, Israel, Ισραήλ, Οικονομία, Business" --max_posts 5 --interval 15
+   python lemmy-rss-pybot.py --feeds rss_feeds.json --log lemmy_bot.log --keywords "Ελλάδα, Κύπρος, Europe, Israel, Ισραήλ, Οικονομία, Business" --max_posts 5 --interva[...]
 """)
         sys.exit(0)
 
@@ -445,7 +471,10 @@ Examples of Lemmy RSS PyBot Usage:
                             if not article_title or not link:
                                 continue  # Skip if essential data is missing
 
-                            if link in seen_articles or article_title in seen_articles.values():
+                            # Use canonical key for dedupe checks
+                            canonical = canonicalize_url(link)
+
+                            if canonical in seen_articles or article_title in seen_articles.values():
                                 continue
                             # Per-feed include_regex filter: if provided, match it against the URL path.
                             include_regex = selected_feed.get('include_regex')
@@ -484,7 +513,7 @@ Examples of Lemmy RSS PyBot Usage:
                             # Proceed to post the article if there are no keyword filters or the article matches
                             try:
                                 create_post(lemmy_instance_url, jwt, community_id, community_name, article_title, link)
-                                seen_articles[link] = article_title
+                                seen_articles[canonical] = article_title
                                 last_post_time[community_name] = datetime.now(timezone.utc)
                                 posts_made += 1
                                 simultaneous_posts += 1
@@ -521,7 +550,7 @@ Examples of Lemmy RSS PyBot Usage:
 
                             try:
                                 create_post(lemmy_instance_url, jwt, community_id, community_name, article_title, link)
-                                seen_articles[link] = article_title
+                                seen_articles[canonical] = article_title
                                 last_post_time[community_name] = datetime.now(timezone.utc)
                                 posts_made += 1
                                 simultaneous_posts += 1
