@@ -35,6 +35,19 @@ class KeywordTests(unittest.TestCase):
         self.assertEqual(BOT.get_feed_keywords({'_keywords': {'python'}}, {'science'}), {'python'})
         self.assertEqual(BOT.get_feed_keywords({}, {'science'}), {'science'})
 
+    def test_skipping_feed_log_contains_community_feed_and_keywords(self):
+        feed = {
+            'community': 'technology@example.com',
+            'feed_url': 'https://example.com/rss',
+            '_keywords': {'python', 'ai'},
+        }
+
+        self.assertEqual(
+            BOT.format_skipping_feed_log(feed, {'fallback'}),
+            '[Skipping feed] Community: technology@example.com : '
+            'RSS Feed: https://example.com/rss : Key Words: ai, python',
+        )
+
     def test_feed_loader_rejects_empty_keywords(self):
         config = [{
             'feed_url': 'https://example.com/rss',

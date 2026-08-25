@@ -252,6 +252,15 @@ def get_feed_keywords(feed, global_keywords):
     """Use per-feed keywords when present; otherwise fall back to global keywords."""
     return feed.get('_keywords', global_keywords)
 
+def format_skipping_feed_log(feed, global_keywords):
+    """Format a consistent log entry for a feed that will not be processed."""
+    keywords = get_feed_keywords(feed, global_keywords)
+    keyword_text = ', '.join(sorted(keywords)) if keywords else 'None'
+    return (
+        f"[Skipping feed] Community: {feed.get('community', 'Unknown')} : "
+        f"RSS Feed: {feed.get('feed_url', 'Unknown')} : Key Words: {keyword_text}"
+    )
+
 def article_matches_keywords(entry, keywords):
     """Match any keyword against an article title or summary."""
     if not keywords:
@@ -457,7 +466,7 @@ Examples of Lemmy RSS PyBot Usage:
             community_feed_map = {}
             for feed in feeds:
                 if not feed.get('enabled', True):  # Skip if 'enabled' is False
-                    logging.info(f"Skipping feed: {feed['feed_url']} (disabled)")
+                    logging.info(format_skipping_feed_log(feed, keywords))
                     continue
                 community_name = feed['community']
                 if community_name not in community_feed_map:
