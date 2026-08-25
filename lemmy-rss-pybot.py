@@ -252,14 +252,18 @@ def get_feed_keywords(feed, global_keywords):
     """Use per-feed keywords when present; otherwise fall back to global keywords."""
     return feed.get('_keywords', global_keywords)
 
-def format_skipping_feed_log(feed, global_keywords):
-    """Format a consistent log entry for a feed that will not be processed."""
+def format_feed_details(feed, global_keywords):
+    """Format community, RSS feed, and effective keywords for logging."""
     keywords = get_feed_keywords(feed, global_keywords)
     keyword_text = ', '.join(sorted(keywords)) if keywords else 'None'
     return (
-        f"[Skipping feed] Community: {feed.get('community', 'Unknown')} : "
+        f"Community: {feed.get('community', 'Unknown')} : "
         f"RSS Feed: {feed.get('feed_url', 'Unknown')} : Key Words: {keyword_text}"
     )
+
+def format_skipping_feed_log(feed, global_keywords):
+    """Format a disabled-feed log entry using the standard feed details."""
+    return f"[Skipping feed] {format_feed_details(feed, global_keywords)}"
 
 def article_matches_keywords(entry, keywords):
     """Match any keyword against an article title or summary."""
@@ -419,6 +423,8 @@ Examples of Lemmy RSS PyBot Usage:
     feed_keyword_count = sum(1 for feed in feeds if '_keywords' in feed)
     regex_count = sum(1 for feed in feeds if '_include_pattern' in feed)
     logging.info(f"Loaded {len(feeds)} feeds ({feed_keyword_count} with keywords, {regex_count} with include_regex).")
+    for feed in feeds:
+        logging.info(format_feed_details(feed, keywords))
 
     if args.test:
         logging.info("Configuration is valid. Test mode will not log in or create posts.")
