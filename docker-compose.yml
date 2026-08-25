@@ -12,4 +12,4 @@ services:
     restart: unless-stopped
     entrypoint: >
       sh -c "test -f /app/rss_feeds.json || (echo 'rss_feeds.json not found' && exit 1); 
-      python lemmy-rss-pybot.py --feeds /app/rss_feeds.json --log /app/data/lemmy_bot.log --interval 15 --max_posts 1"
+      python lemmy-rss-pybot.py --feeds /app/rss_feeds.json --log /app/data/lemmy_bot.log --state /app/data/seen_articles.json --interval 15 --max_posts 1"

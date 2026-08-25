@@ -172,6 +172,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Lemmy RSS PyBot: Reads RSS feeds and posts new articles to Lemmy communities.')
     parser.add_argument('--feeds', type=str, default='rss_feeds.json', help='Path to RSS feeds JSON file.')
     parser.add_argument('--log', type=str, default='lemmy_bot.log', help='Path to log file.')
+    parser.add_argument('--state', type=str, default='seen_articles.json', help='Path to persistent seen-article state.')
     # Accept the same option under two names but store as interval
     parser.add_argument('--interval', '--time', dest='interval', type=int, default=15,
                         help='Interval in minutes between feed checks (default: 15 minutes). Alias: --time')
@@ -356,8 +357,8 @@ def create_post(base_url, jwt, community_id, community_name, title, url):
     else:
         raise Exception(f'Failed to create post: {response.status_code} {response.text}')
 
-def load_seen_articles(log_file):
-    """Load seen articles from the log file by parsing log entries."""
+def load_seen_articles_from_log(log_file):
+    """Read historical posted-article entries from a log for migration."""
     seen_articles = {}
     if os.path.exists(log_file):
         with open(log_file, 'r') as f:
@@ -375,6 +376,35 @@ def load_seen_articles(log_file):
                         article_title = match.group(1).strip()
                         article_url = match.group(2).strip()
                         seen_articles[article_url] = article_title
+    return seen_articles
+
+def save_seen_articles(state_file, seen_articles):
+    """Atomically save seen articles independently of rotating logs."""
+    state_directory = os.path.dirname(os.path.abspath(state_file))
+    os.makedirs(state_directory, exist_ok=True)
+    temporary_file = f"{state_file}.tmp"
+    with open(temporary_file, 'w', encoding='utf-8') as f:
+        json.dump(seen_articles, f, ensure_ascii=False, indent=2, sort_keys=True)
+    os.replace(temporary_file, state_file)
+
+def load_seen_articles(state_file, log_file):
+    """Load durable seen state, migrating existing log history on first use."""
+    if os.path.exists(state_file):
+        try:
+            with open(state_file, 'r', encoding='utf-8') as f:
+                seen_articles = json.load(f)
+        except (OSError, json.JSONDecodeError) as e:
+            raise ValueError(f"Cannot read seen-article state '{state_file}': {e}") from e
+        if not isinstance(seen_articles, dict) or not all(
+            isinstance(url, str) and isinstance(title, str)
+            for url, title in seen_articles.items()
+        ):
+            raise ValueError(f"Seen-article state '{state_file}' has an invalid format.")
+        return seen_articles
+
+    seen_articles = load_seen_articles_from_log(log_file)
+    save_seen_articles(state_file, seen_articles)
+    logging.info(f"Created persistent seen-article state with {len(seen_articles)} migrated entries.")
     return seen_articles
 
 def main():
@@ -434,6 +464,12 @@ Examples of Lemmy RSS PyBot Usage:
         logging.info("Configuration is valid. Test mode will not log in or create posts.")
         return
 
+    try:
+        seen_articles = load_seen_articles(args.state, args.log)
+    except (OSError, ValueError) as e:
+        logging.error(f"State error: {e}")
+        sys.exit(1)
+
     clean_old_logs(args.log)
     last_cleanup_time = datetime.now()
 
@@ -442,8 +478,6 @@ Examples of Lemmy RSS PyBot Usage:
     except ValueError as e:
         logging.error(str(e))
         sys.exit(1)
-
-    seen_articles = load_seen_articles(args.log)
 
     jwt = None
     def login():
@@ -549,6 +583,11 @@ Examples of Lemmy RSS PyBot Usage:
                             try:
                                 create_post(lemmy_instance_url, jwt, community_id, community_name, article_title, link)
                                 seen_articles[link] = article_title
+                                try:
+                                    save_seen_articles(args.state, seen_articles)
+                                except OSError as e:
+                                    logging.critical(f"Posted article but could not save seen state: {e}")
+                                    raise SystemExit(1)
                                 last_post_time[community_name] = datetime.now(timezone.utc)
                                 posts_made += 1
                                 simultaneous_posts += 1
