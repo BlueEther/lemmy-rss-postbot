@@ -565,7 +565,8 @@ Examples of Lemmy RSS PyBot Usage:
                             break
 
                     if not found_matching_articles:
-                        logging.info(f"No matching articles found for community '{community_name}'.")
+                        for feed in community_feeds:
+                            logging.info(format_skipping_feed_log(feed, keywords))
 
             if posts_made == 0:
                 logging.info(f"No new posts made. Sleeping for {args.interval} minutes.")
