@@ -265,6 +265,10 @@ def format_skipping_feed_log(feed, global_keywords):
     """Format a disabled-feed log entry using the standard feed details."""
     return f"[Skipping feed] {format_feed_details(feed, global_keywords)}"
 
+def format_no_match_log(feed, global_keywords):
+    """Format a no-match log entry using the standard feed details."""
+    return f"[No matching articles found] {format_feed_details(feed, global_keywords)}"
+
 def article_matches_keywords(entry, keywords):
     """Match any keyword against an article title or summary."""
     if not keywords:
@@ -566,7 +570,7 @@ Examples of Lemmy RSS PyBot Usage:
 
                     if not found_matching_articles:
                         for feed in community_feeds:
-                            logging.info(format_skipping_feed_log(feed, keywords))
+                            logging.info(format_no_match_log(feed, keywords))
 
             if posts_made == 0:
                 logging.info(f"No new posts made. Sleeping for {args.interval} minutes.")

@@ -52,6 +52,11 @@ class KeywordTests(unittest.TestCase):
             '[Skipping feed] Community: technology@example.com : '
             'RSS Feed: https://example.com/rss : Key Words: ai, python',
         )
+        self.assertEqual(
+            BOT.format_no_match_log(feed, {'fallback'}),
+            '[No matching articles found] Community: technology@example.com : '
+            'RSS Feed: https://example.com/rss : Key Words: ai, python',
+        )
 
     def test_feed_loader_rejects_empty_keywords(self):
         config = [{
