@@ -43,6 +43,28 @@ class RuntimeSafetyTests(unittest.TestCase):
         with self.assertRaisesRegex(Exception, 'Failed to create post'):
             BOT.create_post('https://lemmy.example', 'jwt', 1, 'news', 'Title', 'https://example.com/story')
 
+    def test_test_mode_does_not_load_credentials_or_post(self):
+        config = [{
+            'feed_url': 'https://example.com/rss',
+            'community': 'news@example.com',
+            'keywords': ['science'],
+        }]
+        with tempfile.TemporaryDirectory() as directory:
+            config_path = Path(directory) / 'feeds.json'
+            log_path = Path(directory) / 'test.log'
+            config_path.write_text(json.dumps(config), encoding='utf-8')
+            argv = ['bot', '--feeds', str(config_path), '--log', str(log_path), '--test']
+            with (
+                patch('sys.argv', argv),
+                patch.object(BOT, 'show_banner'),
+                patch.object(BOT, 'load_credentials') as load_credentials,
+                patch.object(BOT, 'create_post') as create_post,
+            ):
+                BOT.main()
+
+            load_credentials.assert_not_called()
+            create_post.assert_not_called()
+
 
 if __name__ == '__main__':
     unittest.main()

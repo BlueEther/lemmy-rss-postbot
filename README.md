@@ -14,7 +14,7 @@ Lemmy RSS PyBot is a powerful Python bot that reads RSS feeds and posts new arti
 
 - 📥 Reads RSS feeds from a JSON file with associated communities.
 - 📝 Posts new articles to specified Lemmy communities.
-- 🔍 Filters articles based on keywords specified via arguments or a file.
+- 🔍 Filters articles with per-feed keywords, optional URL-path regexes, or global fallback keywords.
 - ⏰ Checks for new articles every specified interval.
 - ⚙️ Uses configuration files for settings and credentials.
 - 📑 Keeps a log of posted articles with rotating logs and auto-clearing mechanism.
@@ -31,15 +31,15 @@ Lemmy RSS PyBot is a powerful Python bot that reads RSS feeds and posts new arti
 ## 🛠️ Installation (both locally or in Docker container)
 
 ```bash
-git clone https://github.com/sv1sjp/lemmy_rss_pybot.git
-cd lemmy-rss-pybot
+git clone https://github.com/BlueEther/lemmy-rss-postbot.git
+cd lemmy-rss-postbot
 ```
 
 ## 🔧 Configuration
 
 ### Environment Variables
 
-Create a `.env` file in the root directory and add your Lemmy credentials:
+Copy `.env.example` to `.env` and add your Lemmy credentials. `.env` is ignored by Git:
 
 ```dotenv
 LEMMY_USERNAME=your_lemmy_username
@@ -49,18 +49,21 @@ LEMMY_INSTANCE_URL=https://your.lemmy.instance.url
 
 ### RSS Feeds
 
-Create a `rss_feeds.json` file to specify the RSS feeds and the Lemmy communities they should post to:
+Create a `rss_feeds.json` file to specify feeds, target communities, and filters:
 
 ```json
 [
     {
         "feed_url": "https://newssite1.com/rss",
         "community": "news@lemmy.example2",
+        "keywords": ["technology", "science", "AI"],
+        "include_regex": "^/(technology|science)/",
         "enabled": true
     },
     {
         "feed_url": "https://anotherexample.com/feed",
         "community": "technology@lemmy.exampple1",
+        "keywords": ["Python", "Machine Learning"],
         "enabled": false
     }
 ]
@@ -77,7 +80,7 @@ pip install -r requirements.txt
 ```
 
 ```bash
-python lemmy_pybot.py --feeds rss_feeds.json --log lemmy_bot.log --interval 15
+python lemmy-rss-pybot.py --feeds rss_feeds.json --log lemmy_bot.log --interval 15
 ```
 
 #### Examples
@@ -85,7 +88,7 @@ python lemmy_pybot.py --feeds rss_feeds.json --log lemmy_bot.log --interval 15
 1. **Basic Usage:**
 
     ```bash
-    python lemmy_pybot.py
+    python lemmy-rss-pybot.py
     ```
 
 2. **Using Specific Time Interval:**
@@ -129,20 +132,38 @@ python lemmy_pybot.py --feeds rss_feeds.json --log lemmy_bot.log --interval 15
     python lemmy-rss-pybot.py --help
     ```
 
-### Keywords (Optional)
+### Feed filters
 
-You can filter articles by keywords using a file or command-line arguments.
+Each feed supports these optional filters:
+
+- `keywords`: an array of keywords matched case-insensitively against the title and summary. Matching any keyword is sufficient, including short terms such as `AI`.
+- `include_regex`: a regular expression matched against the article URL path, not its hostname or query string.
+
+When both filters are present, an article must pass both. Invalid or empty filters stop the bot during startup rather than allowing unfiltered posts.
+
+Per-feed `keywords` override global keywords for that feed. A feed without its own keywords falls back to `--keywords` or `--keywords-file`. With neither configured, that feed is not keyword-filtered.
+
+Global keyword options remain available:
 
 - Create a `keywords.txt` file with one keyword per line.
 - Or specify keywords via the `--keywords` argument.
-- 
-#### Run with Docker Compose 🐳
-The image has already been uploaded on DockerHub, however Dockerfile is available to built it by your own.
-In lemmy-rss-pybot folder, after configuring the required files, run:
+
+Validate the complete feed configuration without logging in or posting:
 
 ```bash
-docker-compose up -d
+python lemmy-rss-pybot.py --feeds rss_feeds.json --test
 ```
+
+#### Run with Docker Compose 🐳
+Compose builds this fork locally so its filtering changes are included. After configuring `.env` and `rss_feeds.json`, run:
+
+```bash
+docker compose build
+docker compose run --rm --entrypoint python lemmy-rss-pybot /app/lemmy-rss-pybot.py --feeds /app/rss_feeds.json --test
+docker compose up -d
+```
+
+The supplied Compose configuration posts at most one article per 15-minute cycle. Increase `--max_posts` only after reviewing verbose logs and confirming the filters behave as expected.
 
 ## 🎯 Contributing
 

@@ -181,7 +181,7 @@ def parse_args():
     parser.add_argument('--max_posts', type=int, default=2, help='Maximum number of posts per interval.')
     parser.add_argument('--simultaneously', type=int, help='Number of posts to make simultaneously in each community before sleeping.')
     parser.add_argument('--example', action='store_true', help='Show examples of the tool usage and exit.')
-    parser.add_argument('--test', action='store_true', help='Test the configuration and exit.')
+    parser.add_argument('--test', action='store_true', help='Validate the configuration and exit without logging in or posting.')
     return parser.parse_args()
 
 def load_credentials():
@@ -395,18 +395,6 @@ Examples of Lemmy RSS PyBot Usage:
 
     setup_logging(args.log, args.verbose)
 
-    # Clean old log entries before starting
-    clean_old_logs(args.log)
-
-    # Track the time for 48-hour cleanups
-    last_cleanup_time = datetime.now()
-
-    try:
-        lemmy_username, lemmy_password, lemmy_instance_url = load_credentials()
-    except ValueError as e:
-        logging.error(str(e))
-        sys.exit(1)
-
     try:
         feeds = load_feeds(args.feeds)
         keywords = load_keywords(args.keywords, args.keywords_file)
@@ -420,7 +408,21 @@ Examples of Lemmy RSS PyBot Usage:
         logging.info("No global keywords specified. Feeds without their own keywords will not be keyword-filtered.")
 
     feed_keyword_count = sum(1 for feed in feeds if '_keywords' in feed)
-    logging.info(f"Loaded {len(feeds)} feeds ({feed_keyword_count} with per-feed keywords).")
+    regex_count = sum(1 for feed in feeds if '_include_pattern' in feed)
+    logging.info(f"Loaded {len(feeds)} feeds ({feed_keyword_count} with keywords, {regex_count} with include_regex).")
+
+    if args.test:
+        logging.info("Configuration is valid. Test mode will not log in or create posts.")
+        return
+
+    clean_old_logs(args.log)
+    last_cleanup_time = datetime.now()
+
+    try:
+        lemmy_username, lemmy_password, lemmy_instance_url = load_credentials()
+    except ValueError as e:
+        logging.error(str(e))
+        sys.exit(1)
 
     seen_articles = load_seen_articles(args.log)
 

@@ -3,6 +3,7 @@
         "feed_url": "https://newssite1.com/rss",
         "community": "news@lemmy.example2",
         "keywords": ["technology", "science", "AI"],
+        "include_regex": "^/(technology|science)/",
         "enabled": true
     },
     {
