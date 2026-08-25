@@ -9,6 +9,9 @@ services:
       - LEMMY_USERNAME=${LEMMY_USERNAME}
       - LEMMY_PASSWORD=${LEMMY_PASSWORD}
       - LEMMY_INSTANCE_URL=${LEMMY_INSTANCE_URL}
+      - LEMMY_BOT_FEEDS=/app/rss_feeds.json
+      - LEMMY_BOT_LOG=/app/data/lemmy_bot.log
+      - LEMMY_BOT_STATE=/app/data/seen_articles.json
     restart: unless-stopped
     entrypoint: >
       sh -c "test -f /app/rss_feeds.json || (echo 'rss_feeds.json not found' && exit 1); 

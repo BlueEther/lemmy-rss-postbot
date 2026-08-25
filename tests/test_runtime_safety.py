@@ -18,6 +18,19 @@ class RuntimeSafetyTests(unittest.TestCase):
             with self.subTest(option=option), patch('sys.argv', ['bot', option, '7']):
                 self.assertEqual(BOT.parse_args().interval, 7)
 
+    def test_compose_environment_supplies_persistent_paths(self):
+        environment = {
+            'LEMMY_BOT_FEEDS': '/app/rss_feeds.json',
+            'LEMMY_BOT_LOG': '/app/data/lemmy_bot.log',
+            'LEMMY_BOT_STATE': '/app/data/seen_articles.json',
+        }
+        with patch.dict(BOT.os.environ, environment), patch('sys.argv', ['bot']):
+            args = BOT.parse_args()
+
+        self.assertEqual(args.feeds, '/app/rss_feeds.json')
+        self.assertEqual(args.log, '/app/data/lemmy_bot.log')
+        self.assertEqual(args.state, '/app/data/seen_articles.json')
+
     def test_include_regex_matches_only_the_url_path(self):
         feed = {'_include_pattern': BOT.regex.compile(r'^/technology/')}
 

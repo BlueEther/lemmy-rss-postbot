@@ -167,6 +167,8 @@ The supplied Compose configuration posts at most one article per 15-minute cycle
 
 Posted article URLs are stored persistently in `data/seen_articles.json`. This state is separate from the rotating log, so restarting the container or cleaning old log entries will not make previously posted articles eligible again. On the first run after upgrading, existing `Posted:` entries are migrated automatically from the current log file.
 
+Compose also supplies the feed, log, and state paths through environment variables. One-off `docker compose run --rm` containers therefore continue using the host-mounted `data/` directory even when `--log` and `--state` are omitted.
+
 ## 🎯 Contributing
 
 Contributions are welcome! Please open an issue or submit a pull request.

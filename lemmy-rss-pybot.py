@@ -170,9 +170,9 @@ def show_banner():
 
 def parse_args():
     parser = argparse.ArgumentParser(description='Lemmy RSS PyBot: Reads RSS feeds and posts new articles to Lemmy communities.')
-    parser.add_argument('--feeds', type=str, default='rss_feeds.json', help='Path to RSS feeds JSON file.')
-    parser.add_argument('--log', type=str, default='lemmy_bot.log', help='Path to log file.')
-    parser.add_argument('--state', type=str, default='seen_articles.json', help='Path to persistent seen-article state.')
+    parser.add_argument('--feeds', type=str, default=os.getenv('LEMMY_BOT_FEEDS', 'rss_feeds.json'), help='Path to RSS feeds JSON file.')
+    parser.add_argument('--log', type=str, default=os.getenv('LEMMY_BOT_LOG', 'lemmy_bot.log'), help='Path to log file.')
+    parser.add_argument('--state', type=str, default=os.getenv('LEMMY_BOT_STATE', 'seen_articles.json'), help='Path to persistent seen-article state.')
     # Accept the same option under two names but store as interval
     parser.add_argument('--interval', '--time', dest='interval', type=int, default=15,
                         help='Interval in minutes between feed checks (default: 15 minutes). Alias: --time')
