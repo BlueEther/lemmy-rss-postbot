@@ -500,11 +500,13 @@ Examples of Lemmy RSS PyBot Usage:
                     while feeds_checked < feeds_to_check and simultaneous_posts < simultaneously and posts_made < args.max_posts:
                         selected_feed = community_feeds[current_feed_idx]
                         feed_url = selected_feed['feed_url']
+                        feed_posted_article = False
 
                         try:
                             feed_data = fetch_feed_with_retries(feed_url)  # Using retry logic
                         except Exception as e:
                             logging.error(f"Failed to fetch feed {feed_url}: {e}")
+                            logging.info(format_skipping_feed_log(selected_feed, keywords))
                             # Move to next feed
                             current_feed_idx = (current_feed_idx + 1) % len(community_feeds)
                             feed_index[community_name] = current_feed_idx
@@ -543,12 +545,16 @@ Examples of Lemmy RSS PyBot Usage:
                                 posts_made += 1
                                 simultaneous_posts += 1
                                 found_matching_articles = True
+                                feed_posted_article = True
 
                                 if simultaneous_posts >= simultaneously or posts_made >= args.max_posts:
                                     break
                             except Exception as e:
                                 logging.error(f"Error posting article '{article_title}' to community '{community_name}': {e}")
                                 logging.debug(traceback.format_exc())
+
+                        if not feed_posted_article:
+                            logging.info(format_skipping_feed_log(selected_feed, keywords))
 
                         # Move to next feed
                         current_feed_idx = (current_feed_idx + 1) % len(community_feeds)
