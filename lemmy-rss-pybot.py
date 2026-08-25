@@ -193,25 +193,68 @@ def load_credentials():
     return lemmy_username, lemmy_password, lemmy_instance_url.rstrip('/')
 
 def load_feeds(feeds_file):
-    with open(feeds_file, 'r') as f:
+    with open(feeds_file, 'r', encoding='utf-8') as f:
         feeds = json.load(f)
+    if not isinstance(feeds, list) or not feeds:
+        raise ValueError("The feeds file must contain a non-empty JSON array.")
+    for index, feed in enumerate(feeds, start=1):
+        if not isinstance(feed, dict):
+            raise ValueError(f"Feed #{index} must be a JSON object.")
+        if 'keywords' in feed:
+            feed['_keywords'] = normalize_keywords(feed['keywords'], f"feed #{index} keywords")
     return feeds
+
+def normalize_keywords(value, context='keywords'):
+    """Normalize a JSON list or comma-separated string into unique keywords."""
+    if isinstance(value, str):
+        values = value.split(',')
+    elif isinstance(value, list) and all(isinstance(item, str) for item in value):
+        values = value
+    else:
+        raise ValueError(f"{context} must be a string or an array of strings.")
+
+    keywords = {
+        unicodedata.normalize('NFKC', keyword.strip()).casefold()
+        for keyword in values
+        if keyword.strip()
+    }
+    if not keywords:
+        raise ValueError(f"{context} must contain at least one non-empty keyword.")
+    return keywords
 
 def load_keywords(keywords_arg, keywords_file):
     keywords = set()
     if keywords_arg:
-        keywords.update([k.strip().lower() for k in keywords_arg.split(',') if k.strip()])
+        keywords.update(normalize_keywords(keywords_arg, '--keywords'))
     if keywords_file:
-        if os.path.exists(keywords_file):
-            with open(keywords_file, 'r', encoding='utf-8') as f:
-                for line in f:
-                    if line.strip():
-                        keywords.add(line.strip().lower())
-        else:
-            logging.error(f"Keywords file '{keywords_file}' not found.")
-    # Remove very short keywords to prevent false positives
-    keywords = {k for k in keywords if len(k) > 3}
+        if not os.path.exists(keywords_file):
+            raise ValueError(f"Keywords file '{keywords_file}' not found.")
+        with open(keywords_file, 'r', encoding='utf-8') as f:
+            file_keywords = [line.strip() for line in f if line.strip()]
+        keywords.update(normalize_keywords(file_keywords, f"keywords file '{keywords_file}'"))
     return keywords
+
+def get_feed_keywords(feed, global_keywords):
+    """Use per-feed keywords when present; otherwise fall back to global keywords."""
+    return feed.get('_keywords', global_keywords)
+
+def article_matches_keywords(entry, keywords):
+    """Match any keyword against an article title or summary."""
+    if not keywords:
+        return True, None
+
+    content = unicodedata.normalize(
+        'NFKC',
+        f"{entry.get('title', '')} {entry.get('summary', '')}",
+    )
+    for keyword in sorted(keywords):
+        pattern = regex.compile(
+            r'(?<!\w)' + regex.escape(keyword) + r'(?!\w)',
+            flags=regex.IGNORECASE | regex.UNICODE,
+        )
+        if pattern.search(content):
+            return True, keyword
+    return False, None
 
 def lemmy_login(base_url, username, password):
     """Login to Lemmy and return the JWT token."""
@@ -345,17 +388,18 @@ Examples of Lemmy RSS PyBot Usage:
 
     try:
         feeds = load_feeds(args.feeds)
+        keywords = load_keywords(args.keywords, args.keywords_file)
     except Exception as e:
-        logging.error(f'Error loading feeds: {e}')
+        logging.error(f'Configuration error: {e}')
         sys.exit(1)
 
-    # Load keywords
-    keywords = load_keywords(args.keywords, args.keywords_file)
-
     if keywords:
-        logging.info(f"Filtering articles with keywords: {', '.join(keywords)}")
+        logging.info(f"Global fallback keywords: {', '.join(sorted(keywords))}")
     else:
-        logging.info("No keywords specified. All articles will be considered.")
+        logging.info("No global keywords specified. Feeds without their own keywords will not be keyword-filtered.")
+
+    feed_keyword_count = sum(1 for feed in feeds if '_keywords' in feed)
+    logging.info(f"Loaded {len(feeds)} feeds ({feed_keyword_count} with per-feed keywords).")
 
     seen_articles = load_seen_articles(args.log)
 
@@ -439,9 +483,6 @@ Examples of Lemmy RSS PyBot Usage:
                             article_title = entry.get('title', '')
                             link = entry.get('link', '')
 
-                            # Initialize content_to_search as an empty string
-                            content_to_search = ""
-
                             if not article_title or not link:
                                 continue  # Skip if essential data is missing
 
@@ -461,64 +502,15 @@ Examples of Lemmy RSS PyBot Usage:
                                 except Exception as e:
                                     logging.debug(f"Error applying include_regex '{include_regex}' to link '{link}': {e}")
 
-                            # Build the content to search for keywords
-                            if keywords:
-                                content_to_search = f"{article_title} {entry.get('summary', '')}"
-                                content_to_search = unicodedata.normalize('NFKD', content_to_search)
-                                content_to_search = unicodedata.normalize('NFC', content_to_search)
-
-                            # Skip articles if keyword filtering is enabled and no keywords are matched
-                            if keywords and content_to_search:
-                                keywords_normalized = [unicodedata.normalize('NFC', kw) for kw in keywords]
-                                matched = False
-                                for keyword in keywords_normalized:
-                                    pattern = regex.compile(r'\b' + regex.escape(keyword) + r'\b', flags=regex.IGNORECASE | regex.UNICODE)
-                                    if pattern.search(content_to_search):
-                                        matched = True
-                                        logging.debug(f"Article '{article_title}' matched keyword '{keyword}'.")
-                                        break
-                                if not matched:
-                                    logging.debug(f"Skipping article '{article_title}' as it does not match any keyword.")
-                                    continue  # Skip if none of the keywords are found
+                            selected_keywords = get_feed_keywords(selected_feed, keywords)
+                            matched, matched_keyword = article_matches_keywords(entry, selected_keywords)
+                            if not matched:
+                                logging.debug(f"Skipping article '{article_title}' because it does not match any keyword.")
+                                continue
+                            if matched_keyword:
+                                logging.debug(f"Article '{article_title}' matched keyword '{matched_keyword}'.")
 
                             # Proceed to post the article if there are no keyword filters or the article matches
-                            try:
-                                create_post(lemmy_instance_url, jwt, community_id, community_name, article_title, link)
-                                seen_articles[link] = article_title
-                                last_post_time[community_name] = datetime.now(timezone.utc)
-                                posts_made += 1
-                                simultaneous_posts += 1
-                                found_matching_articles = True
-
-                                if simultaneous_posts >= simultaneously or posts_made >= args.max_posts:
-                                    break
-                            except Exception as e:
-                                logging.error(f"Error posting article '{article_title}' to community '{community_name}': {e}")
-                                logging.debug(traceback.format_exc())
-
-                            # Keyword filtering
-                            if keywords:
-                                content_to_search = f"{article_title} {entry.get('summary', '')}"
-                                content_to_search = unicodedata.normalize('NFKD', content_to_search)
-                                matched = False
-                                # Normalize content to NFC
-                            content_to_search = unicodedata.normalize('NFC', content_to_search)
-
-                            # Normalize keywords to NFC
-                            keywords_normalized = [unicodedata.normalize('NFC', kw) for kw in keywords]
-
-                            matched = False
-                            for keyword in keywords_normalized:
-                                # Compile a Unicode-aware regex pattern with word boundaries
-                                pattern = regex.compile(r'\b' + regex.escape(keyword) + r'\b', flags=regex.IGNORECASE | regex.UNICODE)
-                                if pattern.search(content_to_search):
-                                    matched = True
-                                    logging.debug(f"Article '{article_title}' matched keyword '{keyword}'.")
-                                    break
-                            if not matched:
-                                logging.debug(f"Skipping article '{article_title}' as it does not match any keyword.")
-                                continue  # Skip if none of the keywords are found
-
                             try:
                                 create_post(lemmy_instance_url, jwt, community_id, community_name, article_title, link)
                                 seen_articles[link] = article_title

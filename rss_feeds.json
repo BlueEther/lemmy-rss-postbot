@@ -2,11 +2,13 @@
     {
         "feed_url": "https://newssite1.com/rss",
         "community": "news@lemmy.example2",
+        "keywords": ["technology", "science", "AI"],
         "enabled": true
     },
     {
         "feed_url": "https://anotherexample.com/feed",
         "community": "technology@lemmy.exampple1",
+        "keywords": ["Python", "Machine Learning"],
         "enabled": false
     }
 ]
