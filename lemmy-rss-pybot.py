@@ -27,6 +27,7 @@ import sys
 import random
 from http.client import RemoteDisconnected
 from urllib.error import URLError
+from urllib.parse import urlparse
 import traceback
 from logging.handlers import RotatingFileHandler
 import regex  # Use 'regex' module instead of 're'
@@ -171,7 +172,7 @@ def parse_args():
     parser = argparse.ArgumentParser(description='Lemmy RSS PyBot: Reads RSS feeds and posts new articles to Lemmy communities.')
     parser.add_argument('--feeds', type=str, default='rss_feeds.json', help='Path to RSS feeds JSON file.')
     parser.add_argument('--log', type=str, default='lemmy_bot.log', help='Path to log file.')
-        # Accept the same option under two names but store as interval
+    # Accept the same option under two names but store as interval
     parser.add_argument('--interval', '--time', dest='interval', type=int, default=15,
                         help='Interval in minutes between feed checks (default: 15 minutes). Alias: --time')
     parser.add_argument('--verbose', action='store_true', help='Enable verbose output.')
@@ -200,8 +201,21 @@ def load_feeds(feeds_file):
     for index, feed in enumerate(feeds, start=1):
         if not isinstance(feed, dict):
             raise ValueError(f"Feed #{index} must be a JSON object.")
+        for field in ('feed_url', 'community'):
+            if not isinstance(feed.get(field), str) or not feed[field].strip():
+                raise ValueError(f"Feed #{index} requires a non-empty '{field}' string.")
+        if 'enabled' in feed and not isinstance(feed['enabled'], bool):
+            raise ValueError(f"Feed #{index} field 'enabled' must be true or false.")
         if 'keywords' in feed:
             feed['_keywords'] = normalize_keywords(feed['keywords'], f"feed #{index} keywords")
+        if 'include_regex' in feed:
+            include_regex = feed['include_regex']
+            if not isinstance(include_regex, str) or not include_regex.strip():
+                raise ValueError(f"Feed #{index} field 'include_regex' must be a non-empty string.")
+            try:
+                feed['_include_pattern'] = regex.compile(include_regex, flags=regex.IGNORECASE)
+            except regex.error as e:
+                raise ValueError(f"Feed #{index} has an invalid include_regex: {e}") from e
     return feeds
 
 def normalize_keywords(value, context='keywords'):
@@ -256,6 +270,18 @@ def article_matches_keywords(entry, keywords):
             return True, keyword
     return False, None
 
+def article_matches_include_regex(feed, link):
+    """Match a validated per-feed regex against the article URL path."""
+    pattern = feed.get('_include_pattern')
+    if pattern is None:
+        return True
+    try:
+        path = urlparse(link).path or ''
+    except ValueError as e:
+        logging.error(f"Rejecting malformed article URL '{link}': {e}")
+        return False
+    return bool(pattern.search(path))
+
 def lemmy_login(base_url, username, password):
     """Login to Lemmy and return the JWT token."""
     logging.info("Attempting to log in to Lemmy...")
@@ -296,27 +322,22 @@ def get_community_id(base_url, community_name, jwt):
 
 def create_post(base_url, jwt, community_id, community_name, title, url):
     """Create a new post in a Lemmy community."""
-    try:
-        post_url = f'{base_url}/api/v3/post'
-        headers = {
-            'Authorization': f'Bearer {jwt}'
-        }
-        data = {
-            'community_id': community_id,
-            'name': title,
-            'url': url
-        }
-        response = requests.post(post_url, headers=headers, json=data)
-        if response.status_code == 200:
-            # Log the article when it's successfully posted
-            log_posted_article(title, url, community_name)
-        elif response.status_code == 401:
-            raise Exception('Unauthorized: JWT expired or invalid.')
-        else:
-            raise Exception(f'Failed to create post: {response.status_code} {response.text}')
-    except Exception as e:
-        logging.error(f"Error posting article '{title}' to community '{community_name}': {e}")
-        logging.debug(traceback.format_exc())
+    post_url = f'{base_url}/api/v3/post'
+    headers = {
+        'Authorization': f'Bearer {jwt}'
+    }
+    data = {
+        'community_id': community_id,
+        'name': title,
+        'url': url
+    }
+    response = requests.post(post_url, headers=headers, json=data)
+    if response.status_code == 200:
+        log_posted_article(title, url, community_name)
+    elif response.status_code == 401:
+        raise Exception('Unauthorized: JWT expired or invalid.')
+    else:
+        raise Exception(f'Failed to create post: {response.status_code} {response.text}')
 
 def load_seen_articles(log_file):
     """Load seen articles from the log file by parsing log entries."""
@@ -456,7 +477,7 @@ Examples of Lemmy RSS PyBot Usage:
                     feed_index[community_name] = random.randint(0, len(community_feeds) - 1)
 
                 if community_name not in last_post_time or \
-                   (datetime.now(timezone.utc) - last_post_time[community_name]).total_seconds() > (args.time or random.randint(11, 23)) * 60:
+                   (datetime.now(timezone.utc) - last_post_time[community_name]).total_seconds() > args.interval * 60:
 
                     simultaneous_posts = 0
                     current_feed_idx = feed_index[community_name]
@@ -488,19 +509,12 @@ Examples of Lemmy RSS PyBot Usage:
 
                             if link in seen_articles or article_title in seen_articles.values():
                                 continue
-                            # Per-feed include_regex filter: if provided, match it against the URL path.
-                            include_regex = selected_feed.get('include_regex')
-                            if include_regex and link:
-                                try:
-                                    from urllib.parse import urlparse
-                                    parsed = urlparse(link)
-                                    path = parsed.path or ""
-                                    pattern = regex.compile(include_regex, flags=regex.IGNORECASE)
-                                    if not pattern.search(path):
-                                        logging.debug(f"Skipping article '{article_title}' because URL path '{path}' does not match include_regex '{include_regex}'.")
-                                        continue
-                                except Exception as e:
-                                    logging.debug(f"Error applying include_regex '{include_regex}' to link '{link}': {e}")
+                            if not article_matches_include_regex(selected_feed, link):
+                                logging.debug(
+                                    f"Skipping article '{article_title}' because its URL path does not "
+                                    f"match include_regex '{selected_feed['include_regex']}'."
+                                )
+                                continue
 
                             selected_keywords = get_feed_keywords(selected_feed, keywords)
                             matched, matched_keyword = article_matches_keywords(entry, selected_keywords)
@@ -537,12 +551,11 @@ Examples of Lemmy RSS PyBot Usage:
                         logging.info(f"No matching articles found for community '{community_name}'.")
 
             if posts_made == 0:
-                interval = args.time if args.time else random.randint(11, 23)
-                logging.info(f"No new posts made. Sleeping for {interval} minutes.")
-                time.sleep(interval * 60)
+                logging.info(f"No new posts made. Sleeping for {args.interval} minutes.")
+                time.sleep(args.interval * 60)
             else:
                 elapsed_time = datetime.now(timezone.utc) - start_time
-                sleep_time = (args.time if args.time else random.randint(11, 23)) * 60 - elapsed_time.total_seconds()
+                sleep_time = args.interval * 60 - elapsed_time.total_seconds()
                 if sleep_time > 0:
                     logging.info(f"Sleeping for {sleep_time / 60:.2f} minutes.")
                     time.sleep(sleep_time)
